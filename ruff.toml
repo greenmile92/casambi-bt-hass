@@ -158,3 +158,5 @@ max-complexity = 25
 [lint.pydocstyle]
 convention = "google"
 property-decorators = ["propcache.api.cached_property"]
+[lint.per-file-ignores]
+"tests/**" = ["D103", "D107", "INP001", "SLF001"]

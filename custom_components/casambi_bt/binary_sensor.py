@@ -71,3 +71,11 @@ class CasambiBinarySensorEntity(BinarySensorEntity, CasambiNetworkEntity):
     def available(self) -> bool:
         """Return True if entity is available."""
         return True
+
+    async def async_added_to_hass(self) -> None:
+        """Write the state whenever the network connects or disconnects."""
+        self._api.register_connection_updates(self.async_write_ha_state)
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Stop writing connection changes."""
+        self._api.unregister_connection_updates(self.async_write_ha_state)

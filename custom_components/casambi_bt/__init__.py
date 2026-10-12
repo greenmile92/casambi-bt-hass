@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Final, cast
 
 from CasambiBt import Casambi, Group, Scene, Unit, UnitControlType
+from CasambiBt._switch import ButtonEventType, SwitchEvent
 from CasambiBt.errors import (
     AuthenticationError,
     BluetoothDeviceNotFoundError,
@@ -34,6 +35,7 @@ from .const import (
     RECONNECT_BACKOFF_MAX,
     RECONNECT_BACKOFF_START,
     RECONNECT_BACKOFF_STEP,
+    SWITCH_EVENT,
 )
 
 _LOGGER: Final = logging.getLogger(__name__)
@@ -101,6 +103,8 @@ class CasambiApi:
         self.casa = cast(Casambi, CasambiProxy(self, self._casa))
 
         self._callback_map: dict[int, list[Callable[[Unit], None]]] = {}
+        self._switch_callback_map: dict[int, list[Callable[[SwitchEvent], None]]] = {}
+        self._connection_callbacks: list[Callable[[], None]] = []
         self._cancel_bluetooth_callback: Callable[[], None] | None = None
         self._reconnect_task: asyncio.Task | None = None
 
@@ -123,6 +127,7 @@ class CasambiApi:
 
             self._casa.registerDisconnectCallback(self._casa_disconnect)
             self._casa.registerUnitChangedHandler(self._unit_changed_handler)
+            self._casa.registerSwitchEventHandler(self._switch_event_handler)
 
             await self._casa.connect(device, self.password)
         except BluetoothError as err:
@@ -159,6 +164,8 @@ class CasambiApi:
 
                 await self._casa.reconnect(device)
                 protocol_error = False
+                _LOGGER.info("Reconnected to network %s.", self.address)
+                self._notify_connection_change()
                 break
             except BluetoothError:
                 _LOGGER.debug(
@@ -249,10 +256,69 @@ class CasambiApi:
         except Exception:
             _LOGGER.exception("Error during disconnect.")
         self._casa.unregisterUnitChangedHandler(self._unit_changed_handler)
+        self._casa.unregisterSwitchEventHandler(self._switch_event_handler)
 
     @callback
     def _casa_disconnect(self) -> None:
+        _LOGGER.info(
+            "Lost connection to network %s. Scheduling reconnect.", self.address
+        )
+        # Notify first so the status is written before the reconnect task runs.
+        self._notify_connection_change()
         self._schedule_reconnect()
+
+    def register_connection_updates(self, c: Callable[[], None]) -> None:
+        """Register a callback for connect and disconnect of the network."""
+        self._connection_callbacks.append(c)
+
+    def unregister_connection_updates(self, c: Callable[[], None]) -> None:
+        """Unregister a callback for connect and disconnect of the network."""
+        self._connection_callbacks.remove(c)
+
+    def _notify_connection_change(self) -> None:
+        # The library calls the disconnect callback before it resets its connection state,
+        # so `connected` is still True here. Run the callbacks after the current call stack.
+        for c in self._connection_callbacks:
+            self.hass.loop.call_soon(c)
+
+    def register_switch_updates(
+        self, unit: Unit, c: Callable[[SwitchEvent], None]
+    ) -> None:
+        """Register a callback for switch events of a unit."""
+        self._switch_callback_map.setdefault(unit.deviceId, []).append(c)
+
+    def unregister_switch_updates(
+        self, unit: Unit, c: Callable[[SwitchEvent], None]
+    ) -> None:
+        """Unregister a callback for switch events of a unit."""
+        self._switch_callback_map[unit.deviceId].remove(c)
+
+    @callback
+    def _switch_event_handler(self, event: SwitchEvent) -> None:
+        if event.event == ButtonEventType.UNKNOWN:
+            _LOGGER.warning(
+                "Unknown switch event from unit %i button %i (target type 0x%02x, flags 0x%x, data %s).",
+                event.unit_id,
+                event.button,
+                event.target_type,
+                event.flags,
+                event.extra_data.hex(),
+            )
+            return
+        _LOGGER.debug("Switch event: %s", event)
+        for c in self._switch_callback_map.get(event.unit_id, []):
+            c(event)
+        # Kept for automations that listen to the event of the former hand-patched install.
+        name = f"button_{event.event.name.lower()}"
+        self.hass.bus.async_fire(
+            SWITCH_EVENT,
+            {
+                "unit_id": event.unit_id,
+                "button": event.button,
+                "event": name,
+                "input_mapped_event": name,
+            },
+        )
 
     def register_unit_updates(self, unit: Unit, c: Callable[[Unit], None]) -> None:
         """Register a callback for unit updates.
@@ -296,7 +362,13 @@ class CasambiApi:
             return
         if self._reconnect_task is None or self._reconnect_task.done():
             self._reconnect_task = self.conf_entry.async_create_background_task(
-                self.hass, self.reconnect(), "Reconnect"
+                self.hass,
+                self.reconnect(),
+                "Reconnect",
+                # Must not start eagerly: the library calls the disconnect callback
+                # while `connected` is still True, so an eager reconnect returns
+                # immediately and no reconnect is ever attempted (#170).
+                eager_start=False,
             )
 
 
