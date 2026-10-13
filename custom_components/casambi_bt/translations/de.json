@@ -31,5 +31,12 @@
                 "title": "Bitte bestätige dein Netzwerk Passwort."
             }
         }
+    },
+    "entity": {
+        "number": {
+            "white_color_balance": {
+                "name": "Weiß / Farbe"
+            }
+        }
     }
 }

@@ -5,7 +5,7 @@ from copy import copy
 import logging
 from typing import Any, Final, cast
 
-from CasambiBt import ColorSource, Group, Unit, UnitControlType, UnitState
+from CasambiBt import ColorSource, Group, Unit, UnitControl, UnitControlType, UnitState
 
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
@@ -16,6 +16,7 @@ from homeassistant.components.light import (
     ColorMode,
     LightEntity,
     LightEntityFeature,
+    filter_supported_color_modes,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -29,6 +30,7 @@ from .entities import (
     CasambiUnitEntity,
     TypedEntityDescription,
 )
+from .number import mix_from_raw
 
 CASA_LIGHT_CTRL_TYPES: Final[list[UnitControlType]] = [
     UnitControlType.DIMMER,
@@ -49,11 +51,17 @@ async def async_setup_entry(
     """Create the Casambi light entities."""
     casa_api: CasambiApi = hass.data[DOMAIN][config_entry.entry_id]
 
-    light_entities: list[CasambiLight] = [
+    light_entities: list[LightEntity] = [
         CasambiLightUnit(casa_api, u) for u in casa_api.get_units(CASA_LIGHT_CTRL_TYPES)
     ]
+    light_entities += [
+        CasambiChannelLight(casa_api, u, c)
+        for u in casa_api.get_units([UnitControlType.SLIDER])
+        for c in u.unitType.controls
+        if c.type == UnitControlType.SLIDER and c.name
+    ]
 
-    group_entities: list[CasambiLight] = []
+    group_entities: list[LightEntity] = []
     if config_entry.data[CONF_IMPORT_GROUPS]:
         group_entities = [CasambiLightGroup(casa_api, g) for g in casa_api.get_groups()]
 
@@ -139,6 +147,26 @@ class CasambiLightUnit(CasambiLight, CasambiUnitEntity):
 
         self._obj: Unit
         super().__init__(api, desc, unit)
+
+    @property
+    def color_mode(self) -> ColorMode:
+        """Show temperature or color, whichever side the white/color balance leans to.
+
+        RGB/TW units drive both at once, Home Assistant can only show one of them.
+        """
+        unit = cast("Unit", self._obj)
+        modes = self.supported_color_modes or set()
+        if (
+            ColorMode.COLOR_TEMP in modes
+            and len(modes) > 1
+            and unit.state is not None
+            and unit.state.white_balance is not None
+        ):
+            # White at full strength up to the middle of the mix.
+            if mix_from_raw(unit.state.white_balance) <= 50:
+                return ColorMode.COLOR_TEMP
+            return self._mode_helper(modes - {ColorMode.COLOR_TEMP})
+        return self._attr_color_mode
 
     @property
     def is_on(self) -> bool:
@@ -232,14 +260,19 @@ class CasambiLightGroup(CasambiLight, CasambiNetworkGroup):
     def __init__(self, api: CasambiApi, group: Group) -> None:
         """Initialize a Casambi group entity."""
 
-        # Find union of supported color modes.
+        # Union of the members' color modes. Members without a light control
+        # (e.g. 4CH slider units) report UNKNOWN, which Home Assistant rejects in a
+        # set, as it rejects BRIGHTNESS next to a color mode.
         supported_modes: set[ColorMode] = set()
         for unit in group.units:
-            supported_modes = supported_modes.union(self._capabilities_helper(unit))
+            supported_modes |= self._capabilities_helper(unit)
+        supported_modes.discard(ColorMode.UNKNOWN)
 
-        if len(supported_modes) == 0:
-            supported_modes.add(ColorMode.UNKNOWN)
-        self._attr_supported_color_modes = supported_modes
+        self._attr_supported_color_modes = (
+            filter_supported_color_modes(supported_modes)
+            if supported_modes
+            else {ColorMode.ONOFF}
+        )
 
         desc = TypedEntityDescription(
             key=str(group.groudId), name=group.name, entity_type="light"
@@ -332,3 +365,50 @@ class CasambiLightGroup(CasambiLight, CasambiNetworkGroup):
             # This might be a bit confusing because the rest isn't synced.
             if self.brightness is not None:
                 await self._api.casa.setLevel(self._obj, self.brightness)
+
+
+class CasambiChannelLight(CasambiUnitEntity, LightEntity):
+    """One named slider channel of a unit (4CH, Sliders/RGBW) as a dimmable light."""
+
+    _attr_color_mode = ColorMode.BRIGHTNESS
+    _attr_supported_color_modes = {ColorMode.BRIGHTNESS}
+
+    def __init__(self, api: CasambiApi, unit: Unit, control: UnitControl) -> None:
+        """Initialize a channel light."""
+        self._control = control
+        desc = TypedEntityDescription(
+            key=f"{unit.uuid}-{control.offset}",
+            name=control.name,
+            entity_type=f"slider-{control.offset}",
+        )
+        self._obj: Unit
+        super().__init__(api, desc, unit)
+
+    @property
+    def brightness(self) -> int | None:
+        """Return the channel value scaled to 0..255."""
+        unit = cast("Unit", self._obj)
+        if unit.state is None:
+            return None
+        return unit.state.sliders.get(self._control.offset)
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return True if the channel is above zero."""
+        brightness = self.brightness
+        return None if brightness is None else brightness > 0
+
+    async def _set(self, brightness: int) -> None:
+        raw = brightness >> (UnitState.SLIDER_RESOLUTION - self._control.length)
+        await self._api.casa.setControlValue(
+            cast("Unit", self._obj), self._control, raw
+        )
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Set the channel, full if no brightness is given."""
+        # ponytail: no "last level" memory, turn on without brightness means full.
+        await self._set(kwargs.get(ATTR_BRIGHTNESS, 255))
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Set the channel to zero."""
+        await self._set(0)

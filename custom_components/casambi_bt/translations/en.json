@@ -31,5 +31,12 @@
                 "title": "Please verify your network password."
             }
         }
+    },
+    "entity": {
+        "number": {
+            "white_color_balance": {
+                "name": "White / color"
+            }
+        }
     }
 }

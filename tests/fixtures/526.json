@@ -1,0 +1,54 @@
+{
+ "id": 526,
+ "type": 0,
+ "time": 1555316330495,
+ "firmware": 6680,
+ "extendedFirmware": 12800,
+ "evoFirmware": 12800,
+ "board": 52737,
+ "vendor": "Casambi",
+ "vendorID": 0,
+ "model": "CBU-TED",
+ "mode": "TE-PC/1ch/Dim{OHI}",
+ "hasPushButton": false,
+ "hasRotarySwitch": false,
+ "hasSmartSwitch": true,
+ "hasModes": true,
+ "hasStartupState": true,
+ "hasPresenceSensor": false,
+ "hasLightSensor": false,
+ "hasGenericSensor": false,
+ "hasDaylightControl": false,
+ "owner": 2,
+ "readOnlyLength": 2,
+ "stateLength": 2,
+ "stateMode": 0,
+ "pushButtonCount": 0,
+ "profiles": [
+  11766,
+  8123,
+  3534
+ ],
+ "controls": [
+  {
+   "type": "overheat",
+   "dataname": "overheat",
+   "offset": 0,
+   "length": 2,
+   "default": 0,
+   "readonly": true
+  },
+  {
+   "type": "dimmer",
+   "offset": 2,
+   "length": 8,
+   "default": 255,
+   "readonly": false
+  }
+ ],
+ "pushButtons": [],
+ "strings": {},
+ "hasTW": false,
+ "daliAddressing": "Device",
+ "extifNetworkControlEnabled": false
+}

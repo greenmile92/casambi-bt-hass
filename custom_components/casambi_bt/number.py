@@ -1,17 +1,19 @@
-"""Support for the vertical control of Casambi compatible lights."""
+"""Number entities: vertical control and white/color balance of Casambi lights."""
 
 from abc import ABCMeta
 import logging
-from typing import cast
+from typing import Final, cast
 
-from CasambiBt import Group, Unit, UnitControlType
+from CasambiBt import Group, Unit, UnitControlType, UnitState
 
 from homeassistant.components.number import (
     NumberDeviceClass,
     NumberEntity,
     NumberEntityDescription,
+    NumberMode,
 )
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import PERCENTAGE
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -25,6 +27,23 @@ from .entities import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# ponytail: direction from the library doc (raw 0 = only white, 63 = only color),
+# not yet measured against the app. If the app shows it the other way round, flip this.
+WHITE_ONLY_AT_ZERO: Final = True
+
+
+def mix_from_raw(raw: int) -> float:
+    """Position of the white/color mix: 0 = only white, 50 = both full, 100 = only color."""
+    pct = raw * 100 / UnitState.WCB_MAX
+    return pct if WHITE_ONLY_AT_ZERO else 100 - pct
+
+
+def raw_from_mix(pct: float) -> int:
+    """Inverse of :func:`mix_from_raw`."""
+    if not WHITE_ONLY_AT_ZERO:
+        pct = 100 - pct
+    return round(pct * UnitState.WCB_MAX / 100)
 
 
 async def async_setup_entry(
@@ -51,7 +70,12 @@ async def async_setup_entry(
             if has_vert:
                 group_entities.append(CasambiVerticalNumberGroup(casa_api, g))
 
-    async_add_entities(light_entities + group_entities)
+    balance_entities = [
+        CasambiWhiteColorNumber(casa_api, u)
+        for u in casa_api.get_units([UnitControlType.WHITECOLORBALANCE])
+    ]
+
+    async_add_entities(light_entities + group_entities + balance_entities)
 
 
 class TypedNumberEntityDescription(TypedEntityDescription, NumberEntityDescription):
@@ -129,3 +153,37 @@ class CasambiVerticalNumberGroup(CasambiVerticalNumber, CasambiNetworkGroup):
         if values:
             return sum(values) / len(values)
         return None
+
+
+class CasambiWhiteColorNumber(CasambiUnitEntity, NumberEntity):
+    """The white/color mix of an RGB/TW or RGBW unit as one slider, like in the app."""
+
+    _attr_native_min_value = 0
+    _attr_native_max_value = 100
+    _attr_native_step = 1
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_mode = NumberMode.SLIDER
+
+    def __init__(self, api: CasambiApi, unit: Unit) -> None:
+        """Initialize the white/color balance entity."""
+        desc = TypedNumberEntityDescription(
+            key=f"{unit.uuid}-white_color_balance",
+            translation_key="white_color_balance",
+            entity_type="white_color_balance",
+        )
+        self._obj: Unit
+        super().__init__(api, desc, unit)
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the mix position in percent."""
+        unit = cast("Unit", self._obj)
+        if unit.state is None or unit.state.white_balance is None:
+            return None
+        return round(mix_from_raw(unit.state.white_balance))
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Set the mix position."""
+        await self._api.casa.setWhiteColorBalance(
+            cast("Unit", self._obj), raw_from_mix(value)
+        )

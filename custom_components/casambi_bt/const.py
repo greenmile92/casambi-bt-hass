@@ -12,6 +12,7 @@ PLATFORMS = [
     Platform.LIGHT,
     Platform.SCENE,
     Platform.NUMBER,
+    Platform.SENSOR,
 ]
 
 CONF_IMPORT_GROUPS: Final = "import_groups"

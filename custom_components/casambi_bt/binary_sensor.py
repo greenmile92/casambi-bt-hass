@@ -1,6 +1,9 @@
 """Binary Sensor implementation for Casambi."""
 
 import logging
+from typing import cast
+
+from CasambiBt import Unit, UnitControlType
 
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
@@ -13,7 +16,7 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import DOMAIN, CasambiApi
-from .entities import CasambiNetworkEntity
+from .entities import CasambiNetworkEntity, CasambiUnitEntity, TypedEntityDescription
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -48,6 +51,11 @@ async def async_setup_entry(
         _LOGGER.debug("Adding CasambiBinarySensorEntity for network...")
         binary_sensors.append(CasambiBinarySensorEntity(api, description))
 
+    binary_sensors.extend(
+        CasambiPresenceSensor(api, unit)
+        for unit in api.get_units([UnitControlType.PRESENCE])
+    )
+
     if binary_sensors:
         _LOGGER.debug("Adding binary sensor entities...")
         async_add_entities(binary_sensors)
@@ -79,3 +87,25 @@ class CasambiBinarySensorEntity(BinarySensorEntity, CasambiNetworkEntity):
     async def async_will_remove_from_hass(self) -> None:
         """Stop writing connection changes."""
         self._api.unregister_connection_updates(self.async_write_ha_state)
+
+
+class CasambiPresenceSensor(CasambiUnitEntity, BinarySensorEntity):
+    """Presence of a Casambi motion/presence sensor (e.g. CBU-CEFL)."""
+
+    _attr_device_class = BinarySensorDeviceClass.OCCUPANCY
+
+    def __init__(self, api: CasambiApi, unit: Unit) -> None:
+        """Initialize the presence sensor."""
+        super().__init__(
+            api,
+            TypedEntityDescription(key=f"{unit.uuid}-presence", entity_type="presence"),
+            unit,
+        )
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return True if presence is detected."""
+        unit = cast("Unit", self._obj)
+        if unit.state is None or unit.state.presence is None:
+            return None
+        return unit.state.presence > 0
