@@ -17,5 +17,5 @@
   "requirements": [
     "git+https://github.com/greenmile92/casambi-bt@67baaa24b65a1946e3cd941dcc03dcced2c17c9d#casambi-bt==0.4.0b5.post4"
   ],
-  "version": "3.0.0b4.post4"
+  "version": "3.0.0b4.post5"
 }
