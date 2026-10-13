@@ -15,7 +15,7 @@
   "integration_type": "hub",
   "iot_class": "local_push",
   "requirements": [
-    "git+https://github.com/greenmile92/casambi-bt@4881e16e2853a423c8b97fbe879cfe65965df2fe#casambi-bt==0.4.0b5.post2"
+    "git+https://github.com/greenmile92/casambi-bt@65210c38cd0726d021f8fe5cca6285c262dab912#casambi-bt==0.4.0b5.post3"
   ],
-  "version": "3.0.0b4.post2"
+  "version": "3.0.0b4.post3"
 }
