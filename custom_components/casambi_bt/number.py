@@ -1,6 +1,7 @@
-"""Number entities: vertical control and white/color balance of Casambi lights."""
+"""Number entities: vertical control, white/color balance and white temperature."""
 
 from abc import ABCMeta
+from collections.abc import Iterable
 import logging
 from typing import Final, cast
 
@@ -13,7 +14,7 @@ from homeassistant.components.number import (
     NumberMode,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE
+from homeassistant.const import PERCENTAGE, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -28,8 +29,7 @@ from .entities import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# ponytail: direction from the library doc (raw 0 = only white, 63 = only color),
-# not yet measured against the app. If the app shows it the other way round, flip this.
+# Measured against the app on 2026-10-13: raw 0 = only white, 63 = only color.
 WHITE_ONLY_AT_ZERO: Final = True
 
 
@@ -44,6 +44,22 @@ def raw_from_mix(pct: float) -> int:
     if not WHITE_ONLY_AT_ZERO:
         pct = 100 - pct
     return round(pct * UnitState.WCB_MAX / 100)
+
+
+def color_temperature_units(units: Iterable[Unit]) -> list[Unit]:
+    """Return units with color and tunable white.
+
+    Their light hides the white temperature while color dominates the mix.
+    TW-only units show it on the light anyway.
+    """
+    return [
+        u
+        for u in units
+        if u.unitType.get_control(UnitControlType.RGB) is not None
+        and (c := u.unitType.get_control(UnitControlType.TEMPERATURE)) is not None
+        and c.min is not None
+        and c.max is not None
+    ]
 
 
 async def async_setup_entry(
@@ -75,7 +91,14 @@ async def async_setup_entry(
         for u in casa_api.get_units([UnitControlType.WHITECOLORBALANCE])
     ]
 
-    async_add_entities(light_entities + group_entities + balance_entities)
+    temperature_entities = [
+        CasambiTemperatureNumber(casa_api, u)
+        for u in color_temperature_units(casa_api.get_units())
+    ]
+
+    async_add_entities(
+        light_entities + group_entities + balance_entities + temperature_entities
+    )
 
 
 class TypedNumberEntityDescription(TypedEntityDescription, NumberEntityDescription):
@@ -187,3 +210,46 @@ class CasambiWhiteColorNumber(CasambiUnitEntity, NumberEntity):
         await self._api.casa.setWhiteColorBalance(
             cast("Unit", self._obj), raw_from_mix(value)
         )
+
+
+class CasambiTemperatureNumber(CasambiUnitEntity, NumberEntity):
+    """Color temperature of the white part of an RGB/TW unit, at any mix.
+
+    The light reports color_temp_kelvin only while white dominates the mix, so
+    without this a scene could not store the white temperature of a color mix.
+    """
+
+    _attr_native_step = 1
+    _attr_native_unit_of_measurement = UnitOfTemperature.KELVIN
+    _attr_mode = NumberMode.SLIDER
+
+    def __init__(self, api: CasambiApi, unit: Unit) -> None:
+        """Initialize the color temperature entity."""
+        control = unit.unitType.get_control(UnitControlType.TEMPERATURE)
+        assert (
+            control is not None and control.min is not None and control.max is not None
+        )
+        self._control = control
+        self._attr_native_min_value = control.min
+        self._attr_native_max_value = control.max
+        desc = TypedNumberEntityDescription(
+            key=f"{unit.uuid}-color_temperature",
+            translation_key="color_temperature",
+            entity_type="color_temperature",
+        )
+        self._obj: Unit
+        super().__init__(api, desc, unit)
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the white temperature in kelvin."""
+        unit = cast("Unit", self._obj)
+        if unit.state is None or unit.state.temperature is None:
+            return None
+        return unit.state.temperature
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Set the white temperature, leaving dimmer, color and mix as they are."""
+        c = self._control
+        raw = UnitState.int_from_temperature(value, c.min, c.max, c.length)  # type: ignore[arg-type]
+        await self._api.casa.setControlValue(cast("Unit", self._obj), c, raw)

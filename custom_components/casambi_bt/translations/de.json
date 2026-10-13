@@ -36,6 +36,9 @@
         "number": {
             "white_color_balance": {
                 "name": "Weiß / Farbe"
+            },
+            "color_temperature": {
+                "name": "Farbtemperatur"
             }
         }
     }

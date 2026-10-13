@@ -28,7 +28,11 @@ from custom_components.casambi_bt.light import (
     CasambiLightGroup,
     CasambiLightUnit,
 )
-from custom_components.casambi_bt.number import CasambiWhiteColorNumber
+from custom_components.casambi_bt.number import (
+    CasambiTemperatureNumber,
+    CasambiWhiteColorNumber,
+    color_temperature_units,
+)
 from custom_components.casambi_bt.sensor import CasambiLuxSensor
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -203,3 +207,68 @@ def test_presence_and_lux(api) -> None:
     unit.setStateFromBytes((12 << 2).to_bytes(2, "little"))
     assert presence.is_on is False
     assert lux.native_value == 12
+
+
+def rgb_tw_state(dimmer: int, hs_raw: int, mix_raw: int, temp_raw: int) -> bytes:
+    """State bytes of an RGB/TW unit (27399): dimmer, hs 18 bit, mix 6 bit, temperature."""
+    val = dimmer | hs_raw << 8 | mix_raw << 26 | temp_raw << 32
+    return val.to_bytes(5, "little")
+
+
+def test_temperature_number_only_for_rgb_tw_units(api) -> None:
+    """RGBW (no TW), TW only, sliders and sensors get no temperature number."""
+    units = [
+        make_unit(27399, 1, LED8_SETTINGS),
+        make_unit(40210, 2),
+        make_unit(27402, 3),
+        make_unit(18285, 4),
+        make_unit(40271, 5),
+        make_unit(37068, 6),
+        make_unit(5511, 7),
+    ]
+    assert [u.deviceId for u in color_temperature_units(units)] == [1]
+
+    number = CasambiTemperatureNumber(api, units[0])
+    assert (number.native_min_value, number.native_max_value) == (2100, 3500)
+    assert number.native_unit_of_measurement == "K"
+
+
+async def test_temperature_number_works_at_any_mix(api) -> None:
+    """Late Evening Cozy: mix 67 (color dominates), white at 2100 K, dim red."""
+    unit = make_unit(27399, settings=LED8_SETTINGS)
+    before = rgb_tw_state(23, 0x00FF, 42, 0)
+    unit.setStateFromBytes(before)
+    light = CasambiLightUnit(api, unit)
+    number = CasambiTemperatureNumber(api, unit)
+
+    assert light.color_mode == ColorMode.RGB  # the light hides the white temperature
+    assert number.native_value == 2100  # the number does not
+
+    await number.async_set_native_value(3500)
+    after = sent_state(api)
+    # Only the temperature byte changes: dimmer, color and mix stay.
+    assert after[:4] == before[:4]
+    assert after[4] == 255
+    assert number.native_value == 3500
+
+
+async def test_light_and_number_agree_on_temperature(api) -> None:
+    """While white dominates, both entities show and write the same value."""
+    unit = make_unit(27399, settings=LED8_SETTINGS)
+    unit.setStateFromBytes(rgb_tw_state(255, 0, 10, 163))
+    light = CasambiLightUnit(api, unit)
+    number = CasambiTemperatureNumber(api, unit)
+    assert light.color_mode == ColorMode.COLOR_TEMP
+    assert light.color_temp_kelvin == number.native_value == 2994
+
+    # Same kelvin through either entity encodes to the same raw value,
+    # and writing back what was read keeps the raw value (scene restore).
+    await number.async_set_native_value(2994)
+    via_number = sent_state(api)[4]
+    await light.async_turn_on(color_temp_kelvin=2994)
+    via_light = sent_state(api)[4]
+    assert via_number == via_light == 163
+
+    await light.async_turn_on(color_temp_kelvin=2500)
+    unit.setStateFromBytes(sent_state(api))
+    assert number.native_value == light.color_temp_kelvin
