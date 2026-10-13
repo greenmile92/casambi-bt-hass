@@ -68,6 +68,19 @@ async def async_setup_entry(
     async_add_entities(light_entities + group_entities)
 
 
+def _unit_lights(unit: Unit) -> bool:
+    """Return True if the unit gives light.
+
+    Units with only slider channels (4CH) report the unit on flag even with all
+    channels at zero, so they count as on only if a channel is above zero.
+    """
+    if any(c.type in CASA_LIGHT_CTRL_TYPES for c in unit.unitType.controls):
+        return unit.is_on
+    if unit.state is not None and unit.state.sliders:
+        return any(v > 0 for v in unit.state.sliders.values())
+    return unit.is_on
+
+
 class CasambiLight(CasambiEntity, LightEntity, metaclass=ABCMeta):
     """Defines a Casambi light entity base class.
 
@@ -283,7 +296,7 @@ class CasambiLightGroup(CasambiLight, CasambiNetworkGroup):
     @property
     def is_on(self) -> bool:
         """Return True if any unit in the group is on."""
-        return any(u.is_on for u in self._unit_map.values())
+        return any(_unit_lights(u) for u in self._unit_map.values())
 
     @property
     def brightness(self) -> int | None:

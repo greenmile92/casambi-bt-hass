@@ -7,6 +7,7 @@ from CasambiBt import Unit, UnitControlType
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
+    SensorEntityDescription,
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
@@ -30,6 +31,10 @@ async def async_setup_entry(
     )
 
 
+class TypedSensorEntityDescription(TypedEntityDescription, SensorEntityDescription):
+    """Describes a Casambi sensor. Home Assistant reads sensor fields from it."""
+
+
 class CasambiLuxSensor(CasambiUnitEntity, SensorEntity):
     """Illuminance of a Casambi sensor (e.g. CBU-CEFL)."""
 
@@ -41,7 +46,7 @@ class CasambiLuxSensor(CasambiUnitEntity, SensorEntity):
         """Initialize the illuminance sensor."""
         super().__init__(
             api,
-            TypedEntityDescription(key=f"{unit.uuid}-lux", entity_type="lux"),
+            TypedSensorEntityDescription(key=f"{unit.uuid}-lux", entity_type="lux"),
             unit,
         )
 

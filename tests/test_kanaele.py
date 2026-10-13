@@ -163,6 +163,21 @@ def test_group_with_4ch_member_has_valid_color_modes(api) -> None:
     assert entity.color_mode == ColorMode.COLOR_TEMP
 
 
+def test_group_is_off_when_4ch_channels_are_zero(api) -> None:
+    """Live in post4: Flur showed on with all members off, the 4CH unit flag was on."""
+    dimmer, tw, four = make_unit(526, 1), make_unit(27402, 2), make_unit(37068, 3)
+    dimmer.setStateFromBytes(bytes([0, 0]))
+    tw.setStateFromBytes(bytes([0, 0]))
+    four.setStateFromBytes(bytes([0, 0, 0, 0]))
+    for unit in (dimmer, tw, four):
+        unit._on = True
+    group = CasambiLightGroup(api, Group(3, "Flur", [dimmer, tw, four]))
+    assert group.is_on is False
+
+    four.setStateFromBytes(bytes([0, 0, 50, 0]))
+    assert group.is_on is True
+
+
 def test_group_of_only_slider_units_is_onoff(api) -> None:
     entity = CasambiLightGroup(api, Group(9, "Nur 4CH", [make_unit(37068, 1)]))
     assert entity.supported_color_modes == {ColorMode.ONOFF}
@@ -175,6 +190,8 @@ def test_presence_and_lux(api) -> None:
     assert presence.device_class == BinarySensorDeviceClass.OCCUPANCY
     assert lux.device_class == SensorDeviceClass.ILLUMINANCE
     assert lux.native_unit_of_measurement == "lx"
+    # Home Assistant reads this while adding the entity (live crash in post4).
+    assert lux.suggested_unit_of_measurement is None
     assert presence.is_on is None
     assert lux.native_value is None
 
