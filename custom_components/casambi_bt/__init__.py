@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Callable, Iterable
+import hashlib
 import inspect
 import logging
 from pathlib import Path
@@ -17,6 +18,8 @@ from CasambiBt.errors import (
 )
 
 from homeassistant.components import bluetooth
+from homeassistant.components.frontend import add_extra_js_url
+from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS, CONF_PASSWORD
 from homeassistant.core import HomeAssistant, callback
@@ -28,6 +31,7 @@ from homeassistant.exceptions import (
 )
 from homeassistant.helpers.device_registry import DeviceEntry
 from homeassistant.helpers.httpx_client import get_async_client
+from homeassistant.helpers.typing import ConfigType
 
 from .const import (
     DOMAIN,
@@ -39,6 +43,20 @@ from .const import (
 )
 
 _LOGGER: Final = logging.getLogger(__name__)
+
+CARD_URL: Final = "/casambi_bt/casambi-mix-card.js"
+CARD_PATH: Final = Path(__file__).parent / "casambi-mix-card.js"
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Serve the white/color mix card and load it on every dashboard."""
+    await hass.http.async_register_static_paths(
+        [StaticPathConfig(CARD_URL, str(CARD_PATH), cache_headers=True)]
+    )
+    # The content hash makes browsers fetch the card again after an update.
+    card = await hass.async_add_executor_job(CARD_PATH.read_bytes)
+    add_extra_js_url(hass, f"{CARD_URL}?v={hashlib.sha256(card).hexdigest()[:8]}")
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
