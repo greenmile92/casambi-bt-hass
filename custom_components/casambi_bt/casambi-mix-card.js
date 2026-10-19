@@ -176,11 +176,17 @@ class CasambiMixCard extends Base {
   }
 }
 
-if (globalThis.customElements && !customElements.get("casambi-mix-card")) {
-  customElements.define("casambi-mix-card", CasambiMixCard);
+export function defineCard(registry = globalThis.customElements) {
+  if (!registry || registry.get("casambi-mix-card")) return;
+  registry.define("casambi-mix-card", CasambiMixCard);
   (window.customCards ??= []).push({
     type: "casambi-mix-card",
     name: "Casambi Weiß / Farbe",
     description: "Mischregler wie in der Casambi-App",
   });
 }
+
+// HA loads this file before app.js. app.js (2026.10) patches the registry with a scoped
+// polyfill whose get() only knows elements defined after the patch, so Lovelace would not
+// find the card. <home-assistant> is defined after the patch: define the card then.
+globalThis.customElements?.whenDefined("home-assistant").then(() => defineCard());

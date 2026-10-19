@@ -28,3 +28,26 @@ test("every raw value survives the way over the number entity", () => {
     assert.equal(rawFromState(String(stateFromRaw(raw))), raw);
   }
 });
+
+test("card is defined in the registry that exists once <home-assistant> is defined", async () => {
+  // HA 2026.10 swaps in a scoped registry polyfill after this file has loaded.
+  const registry = () => {
+    const names = new Map();
+    return { names, get: (n) => names.get(n), define: (n, c) => names.set(n, c) };
+  };
+  const native = registry();
+  let haReady;
+  native.whenDefined = () => new Promise((resolve) => (haReady = resolve));
+  globalThis.window = globalThis;
+  globalThis.customElements = native;
+  await import("../custom_components/casambi_bt/casambi-mix-card.js?registry");
+  assert.equal(native.names.size, 0, "defined before HA patched the registry");
+
+  const polyfill = registry();
+  globalThis.customElements = polyfill;
+  haReady();
+  await new Promise((resolve) => setTimeout(resolve));
+  assert.ok(polyfill.get("casambi-mix-card"));
+  assert.deepEqual(window.customCards.map((c) => c.type), ["casambi-mix-card"]);
+  delete globalThis.customElements;
+});
